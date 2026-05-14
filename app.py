@@ -9,54 +9,76 @@ uploaded_file = st.file_uploader("Choose NSE CSV file", type="csv")
 
 if uploaded_file:
     try:
-        # Step 1: Read the raw file to find where the actual data starts
-        raw_data = pd.read_csv(uploaded_file)
+        # Step 1: Read the raw file
+        df_raw = pd.read_csv(uploaded_file)
         
-        # Look for the row that contains 'Strike Price' or 'STRIKE PRICE'
-        header_row = 0
-        for i, row in raw_data.iterrows():
-            row_str = row.astype(str).str.upper().tolist()
-            if any("STRIKE" in s for s in row_str):
-                header_row = i + 1
+        # Step 2: Find the row where the actual table headers start
+        # We look for the row containing 'Strike Price'
+        header_row_index = None
+        for i in range(len(df_raw)):
+            row_values = df_raw.iloc[i].astype(str).str.upper().tolist()
+            if any("STRIKE" in s for s in row_values):
+                header_row_index = i
                 break
         
-        # Step 2: Re-read the file from that correct row
-        uploaded_file.seek(0)
-        df = pd.read_csv(uploaded_file, skiprows=header_row)
-        df.columns = [c.strip().upper() for c in df.columns] # Normalize names
-        
-        # Step 3: Find the Strike Price column even if name varies
-        strike_col = [c for c in df.columns if "STRIKE" in c][0]
-        df = df[df[strike_col].notna()]
-        df = df[df[strike_col].astype(str).str.upper() != 'TOTAL']
+        if header_row_index is None:
+            st.error("Could not find 'Strike Price' in this file. Please use a standard NSE CSV.")
+        else:
+            # Re-read the dataframe correctly
+            uploaded_file.seek(0)
+            df = pd.read_csv(uploaded_file, skiprows=header_row_index + 1)
+            df.columns = [str(c).strip().upper() for c in df.columns]
+            
+            # Clean 'TOTAL' row and empty strikes
+            strike_col = [c for c in df.columns if "STRIKE" in c][0]
+            df = df[df[strike_col].notna()]
+            df = df[df[strike_col].astype(str).str.upper().str.contains("TOTAL") == False]
 
-        # Step 4: Numeric cleaning
-        for col in df.columns:
-            if any(x in col for x in ['OI', 'CHNG', 'LTP', 'IV', 'VOLUME']):
-                df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+            # Step 3: Identify CE and PE OI columns
+            # NSE format: CALLS are usually on the left of Strike, PUTS on the right
+            cols = list(df.columns)
+            strike_idx = cols.index(strike_col)
+            
+            # CE OI is the 'OI' column found BEFORE the strike price
+            ce_oi_col = [c for c in cols[:strike_idx] if "OI" in c and "CHNG" not in c][0]
+            # PE OI is the 'OI' column found AFTER the strike price
+            pe_oi_col = [c for c in cols[strike_idx:] if "OI" in c and "CHNG" not in c][0]
 
-        # Step 5: Logic for Calls and Puts based on column position
-        # Standard NSE: Calls on left, Strike in middle, Puts on right
-        mid_idx = df.columns.get_loc(strike_col)
-        ce_df = df.iloc[:, :mid_idx]
-        pe_df = df.iloc[:, mid_idx+1:]
-        
-        ce_oi_total = ce_df.filter(like='OI').iloc[:, 0].sum()
-        pe_oi_total = pe_df.filter(like='OI').iloc[:, 0].sum()
-        pcr = round(pe_oi_total / ce_oi_total, 2) if ce_oi_total > 0 else 0
+            # Convert to numbers
+            df[ce_oi_col] = pd.to_numeric(df[ce_oi_col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+            df[pe_oi_col] = pd.to_numeric(df[pe_oi_col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+            df[strike_col] = pd.to_numeric(df[strike_col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
 
-        # UI
-        c1, c2 = st.columns(2)
-        c1.metric("PCR (OI)", pcr)
-        c2.metric("Sentiment", "Bullish" if pcr > 1.1 else "Bearish" if pcr < 0.7 else "Neutral")
+            # Metrics
+            total_ce_oi = df[ce_oi_col].sum()
+            total_pe_oi = df[pe_oi_col].sum()
+            pcr = round(total_pe_oi / total_ce_oi, 2) if total_ce_oi > 0 else 0
 
-        # OI Chart
-        fig = go.Figure()
-        fig.add_trace(go.Bar(x=df[strike_col], y=ce_df.filter(like='OI').iloc[:,0], name='Call OI', marker_color='red'))
-        fig.add_trace(go.Bar(x=df[strike_col], y=pe_df.filter(like='OI').iloc[:,0], name='Put OI', marker_color='green'))
-        fig.update_layout(barmode='group', title="Open Interest Distribution", xaxis_title="Strike Price", legend=dict(orientation="h", y=1.1))
-        st.plotly_chart(fig, use_container_width=True)
+            c1, c2 = st.columns(2)
+            c1.metric("PCR (OI)", pcr)
+            c2.metric("Sentiment", "Bullish" if pcr > 1.0 else "Bearish" if pcr < 0.7 else "Neutral")
+
+            # Chart
+            # Focus on strikes around the middle (ATM) for better visibility on mobile
+            df_chart = df.sort_values(by=strike_col)
+            
+            fig = go.Figure()
+            fig.add_trace(go.Bar(x=df_chart[strike_col], y=df_chart[ce_oi_col], name='Call OI', marker_color='#EF553B'))
+            fig.add_trace(go.Bar(x=df_chart[strike_col], y=df_chart[pe_oi_col], name='Put OI', marker_color='#00CC96'))
+            
+            fig.update_layout(
+                barmode='group',
+                title="Open Interest by Strike",
+                xaxis_title="Strike Price",
+                yaxis_title="OI Contracts",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                margin=dict(l=0, r=0, t=50, b=0)
+            )
+            st.plotly_chart(fig, use_container_width=True)
 
     except Exception as e:
-        st.error(f"Error: {e}")
-        st.write("Tip: Download the CSV fresh from the NSE 'Option Chain' page.")
+        st.error(f"Analysis Error: {e}")
+        st.info("Check: Are you uploading the full Option Chain CSV from the NSE 'Download' button?")
+
+else:
+    st.info("Please upload an NSE Index or Stock Option Chain CSV file.")
