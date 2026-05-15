@@ -118,4 +118,27 @@ if file_p and file_c:
                     "61.8%": lo + (diff * 0.618),
                     "50.0%": lo + (diff * 0.5),
                     "38.2%": lo + (diff * 0.382),
-                    "0.0
+                    "0.0%": lo
+                }
+                
+                fig_f = go.Figure()
+                for k, v in levels.items():
+                    fig_f.add_hline(y=v, line_dash="dash", annotation_text=k)
+                fig_f.update_layout(template="plotly_dark", title="Fibonacci Premium Levels")
+                st.plotly_chart(fig_f, use_container_width=True)
+
+            with t3:
+                st.subheader("Logic & Strategy")
+                # Contradiction Logic
+                if ce_oi_delta > 0 and ce_pct < 0:
+                    st.error("⚠️ CE SHORT BUILD-UP (Selling Resistance)")
+                if pe_oi_delta > 0 and pe_pct < 0:
+                    st.success("⚠️ PE SHORT BUILD-UP (Support Buying)")
+                
+                ce_s = "BUY" if (ce_oi_delta < 0 and ce_pct > 0) else "SELL" if ce_oi_delta > 0 else "HOLD"
+                pe_s = "BUY" if (pe_oi_delta < 0 and pe_pct > 0) else "SELL" if pe_oi_delta > 0 else "HOLD"
+                
+                st.info(f"**Final View:** CE Action: {ce_s} | PE Action: {pe_s}")
+
+else:
+    st.info("👈 Upload your Previous and Current day CSV files in the sidebar to start.")
