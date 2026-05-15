@@ -3,36 +3,35 @@ import pandas as pd
 import numpy as np
 from scipy.stats import norm
 
-# --- MATHEMATICAL ENGINE: BLACK-SCHOLES FOR GREEKS ---
+# --- BLACK-SCHOLES MATHEMATICAL ENGINE ---
 def calculate_greeks(S, K, T, r, sigma, option_type="CE"):
-    if T <= 0 or sigma <= 0: return 0, 0, 0
-    d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
-    d2 = d1 - sigma * np.sqrt(T)
-    
-    if option_type == "CE":
-        delta = norm.cdf(d1)
-        theta = -(S * norm.pdf(d1) * sigma / (2 * np.sqrt(T))) - r * K * np.exp(-r * T) * norm.cdf(d2)
-    else:
-        delta = -norm.cdf(-d1)
-        theta = -(S * norm.pdf(d1) * sigma / (2 * np.sqrt(T))) + r * K * np.exp(-r * T) * norm.cdf(-d2)
-    
-    gamma = norm.pdf(d1) / (S * sigma * np.sqrt(T))
-    return round(delta, 3), round(gamma, 4), round(theta / 365, 2)
+    if T <= 0 or sigma <= 0 or S <= 0 or K <= 0: return 0, 0, 0
+    try:
+        d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
+        d2 = d1 - sigma * np.sqrt(T)
+        if option_type == "CE":
+            delta = norm.cdf(d1)
+            theta = -(S * norm.pdf(d1) * sigma / (2 * np.sqrt(T))) - r * K * np.exp(-r * T) * norm.cdf(d2)
+        else:
+            delta = -norm.cdf(-d1)
+            theta = -(S * norm.pdf(d1) * sigma / (2 * np.sqrt(T))) + r * K * np.exp(-r * T) * norm.cdf(-d2)
+        gamma = norm.pdf(d1) / (S * sigma * np.sqrt(T))
+        return round(delta, 3), round(gamma, 4), round(theta / 365, 2)
+    except:
+        return 0, 0, 0
 
-# --- CONFIGURATION ---
-st.set_page_config(page_title="Legendary Market Auditor", layout="wide")
+st.set_page_config(page_title="Institutional Auditor", layout="centered")
 st.title("🛡️ Institutional Option Vector Auditor")
 
-# --- MULTI-MODAL UPLOAD ---
-uploaded_file = st.file_uploader("Upload Data (CSV for Analysis, Image for Visual Audit)", type=["csv", "jpg", "jpeg"])
+uploaded_file = st.file_uploader("Upload NSE CSV or Image for Audit", type=["csv", "jpg", "jpeg"])
 
 if uploaded_file:
     if uploaded_file.type != "text/csv":
         st.image(uploaded_file, caption="Visual Reference Uploaded")
-        st.info("Visual data acknowledged. Please upload the corresponding CSV for mathematical execution.")
+        st.info("Visual data acknowledged. Upload CSV for mathematical execution.")
     else:
         try:
-            # 1. DATA INGESTION & HEURISTIC POSITIONING
+            # 1. DATA EXTRACTION
             df_raw = pd.read_csv(uploaded_file, header=None).astype(str)
             data_start = None
             for i in range(len(df_raw)):
@@ -42,55 +41,38 @@ if uploaded_file:
                     break
             
             if data_start is None:
-                st.error("Mathematical Header Not Found.")
+                st.error("Mathematical Header Not Found. Use raw NSE CSV.")
             else:
-                # 2. VECTOR EXTRACTION
                 df = df_raw.iloc[data_start:].copy()
                 for col in df.columns:
                     df[col] = pd.to_numeric(df[col].str.replace(',', ''), errors='coerce').fillna(0)
                 
+                # Mapping Constants
                 strike = df.iloc[:, df.shape[1]//2]
-                ce_oi, ce_choi, ce_ltp, ce_iv = df.iloc[:, 1], df.iloc[:, 2], df.iloc[:, 5], df.iloc[:, 4]
-                pe_oi, pe_choi, pe_ltp, pe_iv = df.iloc[:, -2], df.iloc[:, -3], df.iloc[:, -6], df.iloc[:, -5]
+                ce_oi, ce_choi, ce_ltp, ce_iv, ce_nc = df.iloc[:, 1], df.iloc[:, 2], df.iloc[:, 5], df.iloc[:, 4], df.iloc[:, 6]
+                pe_oi, pe_choi, pe_ltp, pe_iv, pe_nc = df.iloc[:, -2], df.iloc[:, -3], df.iloc[:, -6], df.iloc[:, -5], df.iloc[:, -7]
                 
-                # Dynamic Spot Calculation (ATM Identification)
                 spot_price = strike.iloc[(strike - ce_ltp.mean()).abs().idxmin()]
-                
-                # 3. BLACK-SCHOLES EXECUTION (GREEKS)
-                # Constants: T (7 days to expiry), r (0.07 risk-free rate)
-                ce_delta, ce_gamma, ce_theta = calculate_greeks(spot_price, spot_price, 7/365, 0.07, ce_iv.mean()/100, "CE")
-                pe_delta, pe_gamma, pe_theta = calculate_greeks(spot_price, spot_price, 7/365, 0.07, pe_iv.mean()/100, "PE")
-
-                # 4. PART 1: POINT-WISE MATHEMATICAL ANALYSIS
-                st.header("PART 1: QUANTITATIVE VECTOR ANALYSIS")
                 pcr = pe_oi.sum() / ce_oi.sum() if ce_oi.sum() > 0 else 0
                 
-                col1, col2, col3 = st.columns(3)
-                col1.metric("PCR (OI Vector)", f"{pcr:.2f}")
-                col2.metric("Systemic Gamma", f"{ce_gamma + pe_gamma:.5f}")
-                col3.metric("Daily Theta Decay", f"{ce_theta + pe_theta:.2f}")
+                # Greeks Calculation
+                c_delta, c_gamma, c_theta = calculate_greeks(spot_price, spot_price, 7/365, 0.07, ce_iv.mean()/100, "CE")
+                p_delta, p_gamma, p_theta = calculate_greeks(spot_price, spot_price, 7/365, 0.07, pe_iv.mean()/100, "PE")
 
-                # Buildup Mapping
-                def get_buildup(p, oi):
-                    if p > 0 and oi > 0: return "Long Buildup"
-                    if p < 0 and oi > 0: return "Short Buildup"
-                    if p > 0 and oi < 0: return "Short Covering"
-                    if p < 0 and oi < 0: return "Long Unwinding"
-                    return "Neutral"
-
-                st.write(f"**ATM Buildup:** CE is in `{get_buildup(ce_choi.sum(), ce_choi.sum())}` | PE is in `{get_buildup(pe_choi.sum(), pe_choi.sum())}`")
-
-                # 5. PART 2: CONTRADICTION AUDIT (CRITICAL)
-                st.header("PART 2: SYSTEMIC CONTRADICTIONS")
-                st.write("Cross-referencing price-action vectors against Open Interest and Greek decay:")
+                # --- PART 1: CONTRADICTIONS FIRST ---
+                st.header("PART 1: SYSTEMIC CONTRADICTIONS")
+                st.write("Cross-referencing price vectors, OI accumulation, and Greek decay:")
                 
                 contradictions = []
+                # Contradiction 1: PCR vs Current Flow
                 if pcr > 1.2 and ce_choi.sum() > pe_choi.sum():
-                    contradictions.append("PCR is Bullish, but current capital flow shows aggressive Call Writing (Bearish divergence).")
-                if ce_choi.sum() < 0 and ce_ltp.iloc[0] > ce_ltp.iloc[1]: # Simplified price trend
-                    contradictions.append("Short Covering detected in Calls: Rising prices are due to exits, not fresh buyers.")
-                if abs(ce_delta) < 0.4 and pcr > 1.5:
-                    contradictions.append("Low Delta sensitivity despite high PCR: Market is top-heavy and lacks momentum.")
+                    contradictions.append("PCR is Bullish, but fresh Call Writing is outpacing Puts (Bearish Divergence).")
+                # Contradiction 2: Premium vs OI (Short Covering Check)
+                if ce_nc.sum() > 0 and ce_choi.sum() < 0:
+                    contradictions.append("Call Price rising on Decreasing OI: Rally is forced by Short Covering, not fresh buying.")
+                # Contradiction 3: Support Liquidation
+                if pe_nc.sum() < 0 and pe_choi.sum() < 0:
+                    contradictions.append("Put Long Unwinding: Support is thinning as buyers exit positions.")
 
                 if not contradictions:
                     st.success("Mathematical alignment confirmed. No loose ends detected.")
@@ -98,29 +80,57 @@ if uploaded_file:
                     for c in contradictions:
                         st.warning(f"⚠️ {c}")
 
-                # 6. PART 3: STRATEGY & CONCLUSION
+                # --- PART 2: MULTI-PART ANALYSIS ---
+                st.header("PART 2: SEGMENTED QUANTITATIVE ANALYSIS")
+                
+                with st.expander("A. Price-OI Dynamics & Buildup"):
+                    def get_buildup(p, oi):
+                        if p > 0 and oi > 0: return "Long Buildup"
+                        if p < 0 and oi > 0: return "Short Buildup"
+                        if p > 0 and oi < 0: return "Short Covering"
+                        if p < 0 and oi < 0: return "Long Unwinding"
+                        return "Neutral"
+                    st.write(f"* **CE Vector:** {get_buildup(ce_nc.sum(), ce_choi.sum())}")
+                    st.write(f"* **PE Vector:** {get_buildup(pe_nc.sum(), pe_choi.sum())}")
+                    st.write(f"* **Contracts Written Off:** {abs(ce_choi[ce_choi<0].sum()) + abs(pe_choi[pe_choi<0].sum()):,.0f} positions squared off.")
+
+                with st.expander("B. Greek & Mathematical Audit"):
+                    st.write(f"* **PCR (OI Ratio):** {pcr:.2f}")
+                    st.write(f"* **Systemic Gamma:** {c_gamma + p_gamma:.5f} (Volatility Risk)")
+                    st.write(f"* **Theta Decay:** {c_theta + p_theta:.2f} per day")
+                    # Fibonacci Golden Ratio Pivot
+                    fib_pivot = strike.min() + (strike.max() - strike.min()) * 0.618
+                    st.write(f"* **Mathematical Pivot (Golden Ratio):** {fib_pivot:,.2f}")
+
+                with st.expander("C. Accumulation & Strong Hand"):
+                    strong_hand = "Sellers (Option Writers)" if abs(ce_choi.sum()) > abs(ce_nc.sum()*10) else "Buyers (Aggressors)"
+                    st.write(f"* **Dominant Entity:** {strong_hand} are currently controlling the narrative.")
+
+                # --- PART 3: STRATEGY ---
                 st.header("PART 3: FINAL STRATEGY")
                 
+                # Logic Finalization
                 st.subheader("Conclusion (Strict Order)")
                 st.markdown(f"""
-                1. **What is the data saying:** PCR is **{pcr:.2f}** with Gamma concentration at **{spot_price}**.
-                2. **Where is the contradiction:** {contradictions[0] if contradictions else "None - Data is synchronized."}
-                3. **Who has the stronger hand:** {"Sellers/Writers" if abs(ce_choi.sum()) > abs(pe_choi.sum()) else "Buyers/Aggressors"} are controlling the narrative.
+                1. **What is the data saying:** PCR is **{pcr:.2f}** with major OI Change of **{ce_choi.sum() + pe_choi.sum():,.0f}**.
+                2. **Where is the contradiction:** {contradictions[0] if contradictions else "None - Vectors are synchronized."}
+                3. **Who has the stronger hand:** **{strong_hand}**.
                 """)
 
-                # Strategy Logic
+                # No Assumption Strategy
+                st.subheader("Actionable Signal")
                 if len(contradictions) > 1:
                     st.info("🎯 **STRATEGY: WAIT AND WATCH**")
-                    st.write("Supporting Logic: Multiple mathematical contradictions detected. Market is in a 'Value Trap' phase.")
+                    st.caption("Reason: Loose ends (contradictions) detected. No directional bet is mathematically safe.")
                 elif pcr > 1.1 and ce_choi.sum() < pe_choi.sum():
-                    st.success("🎯 **STRATEGY: BUY / GO LONG**")
-                    st.write(f"Supporting Logic: Put writing dominance confirmed at {spot_price}. Delta alignment is positive.")
-                elif pcr < 0.9 and ce_choi.sum() > pe_choi.sum():
-                    st.error("🎯 **STRATEGY: SELL / GO SHORT**")
-                    st.write("Supporting Logic: Call writing saturation detected. Mathematical resistance verified by Greek decay.")
+                    st.success("🎯 **STRATEGY: BUY / HOLD**")
+                    st.caption("Reason: Put writing dominance and positive price-OI alignment confirmed.")
+                elif pcr < 0.8 and ce_choi.sum() > pe_choi.sum():
+                    st.error("🎯 **STRATEGY: SELL**")
+                    st.caption("Reason: Heavy call writing and mathematical resistance at pivot levels.")
                 else:
                     st.warning("🎯 **STRATEGY: HOLD**")
-                    st.write("Supporting Logic: Market is in an equilibrium state. Volatility (Gamma) is too low for a directional bet.")
+                    st.caption("Reason: Market is at equilibrium. No aggressive buildup detected.")
 
         except Exception as e:
-            st.error(f"Mathematical failure in audit: {e}")
+            st.error(f"Audit failed: {e}")
