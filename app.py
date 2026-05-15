@@ -4,180 +4,152 @@ import numpy as np
 import plotly.graph_objects as go
 
 # -----------------------------------------------------------------------------
-# 1. Page Configuration (Strictly Native)
+# 1. CORE CONFIGURATION
 # -----------------------------------------------------------------------------
 st.set_page_config(
-    page_title="Institutional Option Analyzer",
-    page_icon="📊",
+    page_title="Option Analytics Pro",
+    page_icon="📈",
     layout="wide"
 )
 
 # -----------------------------------------------------------------------------
-# 2. Logic Functions
+# 2. ROBUST DATA PROCESSING
 # -----------------------------------------------------------------------------
-def clean_and_load(file):
-    """Parses and validates the CSV data types and columns."""
+def process_upload(file):
     if file is None:
         return None
     try:
-        df = pd.read_csv(file)
-        # Remove any leading/trailing spaces from column names
-        df.columns = [str(c).strip() for c in df.columns]
+        # Load and clean column names
+        data = pd.read_csv(file)
+        data.columns = [str(c).strip() for c in data.columns]
         
-        required_columns = ['Strike Price', 'CE Price', 'CE OI', 'PE Price', 'PE OI']
-        
-        # Check if columns exist
-        if not all(col in df.columns for col in required_columns):
-            st.sidebar.error(f"Error: {file.name} is missing columns {required_columns}")
+        # Verify columns
+        required = ['Strike Price', 'CE Price', 'CE OI', 'PE Price', 'PE OI']
+        if not all(col in data.columns for col in required):
+            st.error(f"Missing columns in {file.name}. Expected: {required}")
             return None
             
-        # Convert to numeric, turning errors into NaN, then dropping rows with no Strike Price
-        for col in required_columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
+        # Convert to numeric
+        for col in required:
+            data[col] = pd.to_numeric(data[col], errors='coerce')
             
-        return df.dropna(subset=['Strike Price'])
+        return data.dropna(subset=['Strike Price'])
     except Exception as e:
-        st.sidebar.error(f"Critical Load Error on {file.name}: {e}")
+        st.error(f"File Error: {e}")
         return None
 
-def calc_fibs(high, low):
-    """Calculates Fibonacci levels based on premium price range."""
-    diff = high - low
-    if diff == 0:
-        diff = 1.0 # Prevent division by zero
-    
-    return {
-        "161.8% (Golden Extension)": low + (diff * 1.618),
-        "100.0% (High)": high,
-        "61.8% (Golden Ratio)": low + (diff * 0.618),
-        "50.0% (Midpoint)": low + (diff * 0.5),
-        "38.2% (Retracement)": low + (diff * 0.382),
-        "23.6% (Retracement)": low + (diff * 0.236),
-        "0.0% (Low)": low
-    }
+def get_fibonacci_grid(h, l):
+    rng = h - l
+    if rng == 0: rng = 1.0
+    # Explicitly defined to prevent dict parser errors
+    f = {}
+    f["161.8% (Golden Extension)"] = l + (rng * 1.618)
+    f["100.0% (High)"] = h
+    f["61.8% (Golden Ratio)"] = l + (rng * 0.618)
+    f["50.0% (Midpoint)"] = l + (rng * 0.5)
+    f["38.2%"] = l + (rng * 0.382)
+    f["23.6%"] = l + (rng * 0.236)
+    f["0.0% (Low)"] = l
+    return f
 
 # -----------------------------------------------------------------------------
-# 3. Main UI Sidebar (FILE UPLOADERS LOCATED HERE)
+# 3. SIDEBAR (FILE UPLOADERS)
 # -----------------------------------------------------------------------------
-st.sidebar.header("📁 Data Input Section")
-
-# The uploaders are explicitly placed in the sidebar
-file_prev = st.sidebar.file_uploader("1. Upload Previous Day CSV", type=["csv"])
-file_curr = st.sidebar.file_uploader("2. Upload Current Day CSV", type=["csv"])
+st.sidebar.title("📁 Data Source")
+uploaded_prev = st.sidebar.file_uploader("Upload Previous Day CSV", type=["csv"])
+uploaded_curr = st.sidebar.file_uploader("Upload Current Day CSV", type=["csv"])
 
 # -----------------------------------------------------------------------------
-# 4. Main Dashboard Logic
+# 4. MAIN DASHBOARD LOGIC
 # -----------------------------------------------------------------------------
-st.title("🛡️ Institutional Option Dynamics & Fibonacci Strategy")
-st.divider()
+st.title("🛡️ Option Chain Dynamics & Strategy")
 
-if file_prev and file_curr:
-    df_prev = clean_and_load(file_prev)
-    df_curr = clean_and_load(file_curr)
+if uploaded_prev and uploaded_curr:
+    df_p = process_upload(uploaded_prev)
+    df_c = process_upload(uploaded_curr)
 
-    if df_prev is not None and df_curr is not None:
-        # Step 1: Match Strike Prices
-        common_strikes = sorted(list(set(df_prev['Strike Price']).intersection(set(df_curr['Strike Price']))))
-
-        if not common_strikes:
-            st.error("No overlapping Strike Prices found between the two files. Please check your data.")
+    if df_p is not None and df_c is not None:
+        # Match strikes
+        common = sorted(list(set(df_p['Strike Price']).intersection(set(df_c['Strike Price']))))
+        
+        if not common:
+            st.error("Strike Price mismatch between files.")
             st.stop()
 
-        # Step 2: User Selection
-        selected_strike = st.sidebar.selectbox("🎯 Select Target Strike", common_strikes)
-        st.sidebar.success(f"Analysis Active: {selected_strike}")
-
-        # Step 3: Data Extraction
-        p_data = df_prev[df_prev['Strike Price'] == selected_strike].iloc[0]
-        c_data = df_curr[df_curr['Strike Price'] == selected_strike].iloc[0]
-
-        # Step 4: Metrics Calculation
-        ce_oi_change = c_data['CE OI'] - p_data['CE OI']
-        pe_oi_change = c_data['PE OI'] - p_data['PE OI']
+        # Selection
+        strike = st.sidebar.selectbox("Select Target Strike Price", common)
         
-        def get_pct(current, previous):
-            return ((current - previous) / previous * 100) if previous != 0 else 0
+        # Extract rows
+        r_p = df_p[df_p['Strike Price'] == strike].iloc[0]
+        r_c = df_c[df_c['Strike Price'] == strike].iloc[0]
 
-        ce_price_pct = get_pct(c_data['CE Price'], p_data['CE Price'])
-        pe_price_pct = get_pct(c_data['PE Price'], p_data['PE Price'])
-        pcr = c_data['PE OI'] / c_data['CE OI'] if c_data['CE OI'] != 0 else 0
+        # Calculations
+        ce_oi_delta = r_c['CE OI'] - r_p['CE OI']
+        pe_oi_delta = r_c['PE OI'] - r_p['PE OI']
+        
+        def calc_pct(c, p):
+            return ((c - p) / p * 100) if p != 0 else 0
 
-        # Step 5: Tabs for Systematic Organization
-        tab1, tab2, tab3 = st.tabs(["📊 Comparison Dashboard", "🌀 Fibonacci Analysis", "🎯 Strategy & Contradictions"])
+        ce_pr_chg = calc_pct(r_c['CE Price'], r_p['CE Price'])
+        pe_pr_chg = calc_pct(r_c['PE Price'], r_p['PE Price'])
+
+        # Organized Tabs
+        tab1, tab2, tab3 = st.tabs(["📊 Performance", "🌀 Fibonacci Grid", "🎯 Strategy Engine"])
 
         with tab1:
-            st.subheader(f"Strike {selected_strike} Performance Metrics")
-            
-            # Use Native Streamlit Metrics (No HTML/CSS to avoid TypeErrors)
+            st.subheader(f"Intraday Comparison: Strike {strike}")
             col1, col2, col3, col4 = st.columns(4)
-            col1.metric("CE Price", f"{c_data['CE Price']}", f"{ce_price_pct:.2f}%")
-            col2.metric("CE OI Delta", f"{int(c_data['CE OI']):,}", f"{int(ce_oi_change):+,}")
-            col3.metric("PE Price", f"{c_data['PE Price']}", f"{pe_price_pct:.2f}%")
-            col4.metric("PE OI Delta", f"{int(c_data['PE OI']):,}", f"{int(pe_oi_change):+,}")
+            
+            # Use native st.metric (Safe and reliable)
+            col1.metric("CE Price", f"{r_c['CE Price']}", f"{ce_pr_chg:.2f}%")
+            col2.metric("CE OI Delta", f"{int(r_c['CE OI']):,}", f"{int(ce_oi_delta):+,}")
+            col3.metric("PE Price", f"{r_c['PE Price']}", f"{pe_pr_chg:.2f}%")
+            col4.metric("PE OI Delta", f"{int(r_c['PE OI']):,}", f"{int(pe_oi_delta):+,}")
 
-            st.write("### Open Interest (OI) Volume Shift")
+            # Plotly Chart
             fig_oi = go.Figure(data=[
-                go.Bar(name='CE OI Delta', x=['Call Options'], y=[ce_oi_change], marker_color='red'),
-                go.Bar(name='PE OI Delta', x=['Put Options'], y=[pe_oi_change], marker_color='green')
+                go.Bar(name='CE OI Shift', x=['Calls'], y=[ce_oi_delta], marker_color='red'),
+                go.Bar(name='PE OI Shift', x=['Puts'], y=[pe_oi_delta], marker_color='green')
             ])
-            fig_oi.update_layout(template="plotly_dark", height=400)
+            fig_oi.update_layout(template="plotly_dark", height=400, title="Net OI Delta Shift")
             st.plotly_chart(fig_oi, use_container_width=True)
 
         with tab2:
-            st.subheader("Fibonacci Retracement Grid (Option Premiums)")
+            st.subheader("Premium Fibonacci Retracement")
+            high_val = float(max(r_c['CE Price'], r_c['PE Price'], r_p['CE Price'], r_p['PE Price']))
+            low_val = float(min(r_c['CE Price'], r_c['PE Price'], r_p['CE Price'], r_p['PE Price']))
             
-            # Calculate range based on highest and lowest premium prices seen
-            high_premium = float(max(c_data['CE Price'], c_data['PE Price'], p_data['CE Price'], p_data['PE Price']))
-            low_premium = float(min(c_data['CE Price'], c_data['PE Price'], p_data['CE Price'], p_data['PE Price']))
-            
-            fib_map = calc_fibs(high_premium, low_premium)
+            fib_map = get_fibonacci_grid(high_val, low_val)
             
             fig_f = go.Figure()
             for label, value in fib_map.items():
-                fig_f.add_hline(y=value, line_dash="dash", annotation_text=f"{label}: {value:.2f}")
+                fig_f.add_hline(y=value, line_dash="dash", annotation_text=label)
             
-            fig_f.update_layout(template="plotly_dark", yaxis_title="Premium Price", height=500)
+            fig_f.update_layout(template="plotly_dark", yaxis_title="Premium Value", height=500)
             st.plotly_chart(fig_f, use_container_width=True)
 
         with tab3:
-            st.subheader("Contradiction & Tactical Execution")
+            st.subheader("Contradictions & Strategy formulation")
+            
+            # 1. Contradictions
+            st.info("**Step 1: Analyzing Market Contradictions**")
+            found = False
+            if ce_oi_delta > 0 and ce_pr_chg < 0:
+                st.warning("⚠️ CONTRADICTION: CE OI rising with falling price. Strong Writing (Selling) detected.")
+                found = True
+            if pe_oi_delta > 0 and pe_pr_chg < 0:
+                st.warning("⚠️ CONTRADICTION: PE OI rising with falling price. Strong Support writing detected.")
+                found = True
+            if not found:
+                st.write("No major structural contradictions found.")
 
-            # 1. Contradiction Logic (Priority)
-            st.markdown("#### 🔍 Step 1: Structural Contradiction Analysis")
-            contradiction_found = False
+            # 2. Strategy
+            st.success("**Step 2: Strategy formulation**")
+            c_strat = "BUY/LONG" if (ce_oi_delta < 0 and ce_pr_chg > 0) else "SELL/WRITE" if (ce_oi_delta > 0) else "NEUTRAL"
+            p_strat = "BUY/LONG" if (pe_oi_delta < 0 and pe_pr_chg > 0) else "SELL/WRITE" if (pe_oi_delta > 0) else "NEUTRAL"
             
-            if ce_oi_change > 0 and ce_price_pct < 0:
-                st.error("**CONTRADICTION DETECTED:** CE OI is rising while Prices are falling. This indicates institutional **Short Build-up (Call Writing)**. Strong resistance expected.")
-                contradiction_found = True
-            
-            if pe_oi_change > 0 and pe_price_pct < 0:
-                st.success("**CONTRADICTION DETECTED:** PE OI is rising while Prices are falling. This indicates institutional **Short Build-up (Put Writing)**. Strong floor support expected.")
-                contradiction_found = True
-            
-            if not contradiction_found:
-                st.info("No logical contradictions found. Premiums and OI are moving in standard momentum.")
-
-            # 2. Final Strategy Formulation
-            st.markdown("---")
-            st.markdown("#### 🎯 Step 2: Formulation of Strategy")
-            
-            # Basic Logic for Strategy
-            ce_action = "BUY/LONG" if (ce_oi_change < 0 and ce_price_pct > 0) else "SELL/WRITE" if (ce_oi_change > 0 and ce_price_pct < 0) else "NEUTRAL/HOLD"
-            pe_action = "BUY/LONG" if (pe_oi_change < 0 and pe_price_pct > 0) else "SELL/WRITE" if (pe_oi_change > 0 and pe_price_pct < 0) else "NEUTRAL/HOLD"
-            
-            s_col1, s_col2 = st.columns(2)
-            with s_col1:
-                st.info(f"**Call Option Strategy:** {ce_action}")
-                st.write(f"Current PCR context: {pcr:.2f}")
-            with s_col2:
-                st.warning(f"**Put Option Strategy:** {pe_action}")
-                st.write("Base this action on Fibonacci levels in Tab 2.")
-
+            s1, s2 = st.columns(2)
+            s1.write(f"**Call Option View:** {c_strat}")
+            s2.write(f"**Put Option View:** {p_strat}")
 else:
-    # This shows before files are uploaded
-    st.info("👈 Please use the sidebar to upload both Previous Day and Current Day CSV files to begin the analysis.")
-    st.image("https://img.icons8.com/clouds/200/csv.png")
-    st.markdown("""
-    **Expected CSV Header Format:**
-    `Strike Price, CE Price, CE OI, PE Price, PE OI`
-    """)
+    st.info("Waiting for Previous and Current CSV files to be uploaded via the sidebar.")
